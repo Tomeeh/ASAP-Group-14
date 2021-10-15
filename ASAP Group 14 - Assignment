@@ -3,7 +3,9 @@
 #-------#
 #packages
 #-------#
-
+install.packages("plm")
+install.packages("wbstats")
+install.packages("multiwayvcov")
 library(ggplot2)
 library(stargazer)
 library(reshape2)
@@ -12,7 +14,6 @@ library(wbstats)
 library(plm)
 library(readxl)
 library(sandwich)  
-install.packages("multiwayvcov")
 library(multiwayvcov)
 library(tidyverse)
 
@@ -35,9 +36,9 @@ dirResults <- paste0(dir, "Results/")
 #---------------------------------------------------#
 
 #import data
-dfPanel <- read_excel("C:/Users/Lucas/Desktop/Advanced Statistics & Programming/Groupassignment/Data/ASAP Group - Data_v6.xlsx", 
-                      sheet = "Data_Current_EU")
-
+##dfPanel <- read_excel("C:/Users/Lucas/Desktop/Advanced Statistics & Programming/Groupassignment/Data/ASAP Group - Data_v6.xlsx", 
+##                      sheet = "Data_Current_EU")
+dfPanel <- read_excel("Europe_Covid_Data.xlsx")
 str(dfPanel)
 #changing all 0s in the gini variable to null values
 dfPanel$gini[dfPanel$gini == 0] <- NA
@@ -249,7 +250,11 @@ dfPanel.sub_means %>%
   facet_wrap(~Country) +
   ylab("Unemployment rate") +
   xlab("Month") +
-  ggtitle("Visualising in-sample prediction, Four Countries")
+  ggtitle("Visualising in-sample prediction, Four Countries") + theme(axis.line = element_line(colour = "black"),
+                                                                      panel.grid.major = element_blank(),
+                                                                      panel.grid.minor = element_blank(),
+                                                                      panel.border = element_blank(),
+                                                                      panel.background = element_blank())
 ggsave(paste0(dir, "unemployment rate.jpg"))
 
 
@@ -274,7 +279,11 @@ dfPanel.sub_means %>%
   facet_wrap(~Country) +
   ylab("Gini coefficient") +
   xlab("Month") +
-  ggtitle("Visualising in-sample prediction, Four Countries")
+  ggtitle("Visualising in-sample prediction, Four Countries") + theme(axis.line = element_line(colour = "black"),
+                                                                   panel.grid.major = element_blank(),
+                                                                   panel.grid.minor = element_blank(),
+                                                                   panel.border = element_blank(),
+                                                                   panel.background = element_blank())
 ggsave(paste0(dir, "Gini coefficient.jpg"))
 
 #------------------------------------------------------------------------------
@@ -439,10 +448,25 @@ stargazer(rsltOLSGini5, rsltOLSGini5A, intercept.bottom = FALSE, align = TRUE, t
 
 ##Create plot of difference in difference effect on unemployment and gini
 dfCovid.plot <- ddply(dfCovid.sub, .(Month_new, Highstringency), summarise,
-                      avgUnemp = mean(unem_rate, na.rm = TRUE))
+                      avgUnemp = mean(unem_rate, na.rm = TRUE),
+                      avgGini = mean(gini, na.rm = TRUE))
+
 dfCovid.plot$cHighstringency <- ifelse(dfCovid.plot$Highstringency == 1, "High Stringency", "Low Stringency")
 
 line.avgUnemp <- ggplot(dfCovid.plot, aes(Month_new, avgUnemp, group = cHighstringency, color = cHighstringency))
-line.avgUnemp + geom_line() + geom_point() + geom_vline(xintercept = 9, linetype = "dashed", size = 1) + ggtitle("Average unemployment rate of high and low stringency countries, Q3 2019 - Q4 2020") + labs(x = "Month", y = "Average Unemployment Rate") +
+line.avgUnemp + geom_line() + geom_point() + geom_vline(xintercept = 9, linetype = "dashed", size = 1) + ggtitle("Average unemployment rate of high and low stringency countries") + labs(x = "Month", y = "Average Unemployment Rate") +
   scale_x_continuous(breaks = scales::pretty_breaks(n = 18)) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 8))
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8)) + theme(axis.line = element_line(colour = "black"),
+                                                                       panel.grid.major = element_blank(),
+                                                                       panel.grid.minor = element_blank(),
+                                                                       panel.border = element_blank(),
+                                                                       panel.background = element_blank())
+
+line.avgGini <- ggplot(dfCovid.plot, aes(Month_new, avgGini, group = cHighstringency, color = cHighstringency))
+line.avgGini + geom_line() + geom_point() + geom_vline(xintercept = 9, linetype = "dashed", size = 1) + ggtitle("Average gini coefficient of high and low stringency countries") + labs(x = "Month", y = "Average Gini") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 18)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) + theme(axis.line = element_line(colour = "black"),
+                                                                    panel.grid.major = element_blank(),
+                                                                    panel.grid.minor = element_blank(),
+                                                                    panel.border = element_blank(),
+                                                                    panel.background = element_blank())
