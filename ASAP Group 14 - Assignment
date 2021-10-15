@@ -1,11 +1,205 @@
-#### Panel Regression Code ####
+#------------------------------------------------------------------------------
+#Differences-in-difference technique tutorial
+#------------------------------------------------------------------------------
 
+###########################################################################
+#Load libraries
+###########################################################################
+library(ggplot2)
+library(RColorBrewer)
+library(psych)
+library(stargazer)
+library(ROCR)
+library(reshape2)
+library(dplyr)
+library(plyr)
+library(gridExtra)
+library(lmtest)
+library(extraDistr)
+library(sandwich)
+library(MASS)
+library(AER)
+library(readxl)
+#Create project folder
+dir <- "~/OneDrive/Documents/Uni/Rotterdam/Block 1/Advanced Statistics/R Data/"
+
+dirProg <- paste0(dir, "Programs/")
+dirData <- paste0(dir, "Data/")
+dirRslt <- paste0(dir, "Results/")
+
+dfCovid <- read_excel(paste0(dirData,"Europe_Covid_Data.xlsx"))
+
+###########################################################################
+#Prepare the data
+###########################################################################
+
+#Create a few variables and set zeros to NA
+dfCovid$gini <- replace(dfCovid$gini, dfCovid$gini == 0, NA)
+dfCovid$MonthYear <- paste0(dfCovid$Month,dfCovid$Year)
+#Converting GDP per capita to GDP per K capita
+dfCovid$GDPkcap <- dfCovid$gdp_per_capita / 1000
+
+dfCovid.sub <- dfCovid[complete.cases(dfCovid),]
+
+#Filter to balance countries (this is due to the previous command, which kicked out
+#countries that didnt have a GINI for 2020, but they are left in for 2019 because there
+#they had a GINI value)
+dfCovid.sub <- dplyr::filter(dfCovid.sub, Country == "Austria" | Country == "Belgium" |
+                               Country == "Bulgaria" | Country == "Croatia" |
+                               Country == "Cyprus" | Country == "Denmark" |
+                               Country == "Estonia" | Country == "Finland" |
+                               Country == "Greece" | Country == "Hungary" |
+                               Country == "Lithuania" | Country == "Netherlands" |
+                               Country == "Portugal" | Country == "Romania" |
+                               Country == "Slovenia" | Country == "Spain" |
+                               Country == "Sweden", .preserve = FALSE)
+
+#Calculating mean value of stay_home for EU and filtering on 2020
+dfCovid.avg <-
+  ddply(dfCovid.sub, .(Year), summarise,
+        avg.stay_home = mean(stay_home, na.rm=TRUE))
+dfCovid.avg <- dplyr::filter(dfCovid.avg, Year == 2020)
+
+#Calculating mean value of stay_home for each country and filtering on 2020
+dfCovid.avg2 <-
+  ddply(dfCovid.sub, .(Country, Year), summarise,
+        avg.stay_home = mean(stay_home, na.rm=TRUE))
+dfCovid.avg2 <- dplyr::filter(dfCovid.avg2, Year == 2020)
+
+#Merging total mean value and per country mean value
+dfCovid.tmp <- merge(dfCovid.avg, dfCovid.avg2, by=c("Year"))
+
+#Classify countries and removing unwanted columns
+dfCovid.tmp$Highstringency <- as.numeric(dfCovid.tmp$avg.stay_home.y > dfCovid.tmp$avg.stay_home.x)
+dfCovid.tmp <- subset(dfCovid.tmp, select = -c(avg.stay_home.y,avg.stay_home.x,Year))
+
+dfCovid.sub <- merge(dfCovid.sub, dfCovid.tmp, by = "Country")
+
+##Adjust the month to remove the duplicate month for 2019 and 2020
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "7"] <- 1
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "8"] <- 2
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "9"] <- 3
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "10"] <- 4
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "11"] <- 5
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "12"] <- 6
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "1"] <- 7
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "2"] <- 8
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "3"] <- 9
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "4"] <- 10
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "5"] <- 11
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "6"] <- 12
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "7"] <- 13
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "8"] <- 14
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "9"] <- 15
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "10"] <- 16
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "11"] <- 17
+dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "12"] <- 18
+
+##Creating a dummy comparing Months 1-9 with months 10-18
+dfCovid.sub$dPeriod <- ifelse(dfCovid.sub$Month_new < 10, 0 ,1)
+
+###########################################################################
+#Summary table
+###########################################################################
+
+avgSAH5 <- ddply(dfCovid.sub, .(dPeriod, Highstringency), summarise,
+                 avgSAH5 = mean(stay_home),
+                 avgUnemp5 = mean(unem_rate),
+                 avgGini5 = mean(gini))
+
+##Tables of outcomes for SAH5
+
+tmpSAH5 <- dcast(avgSAH5, dPeriod ~ Highstringency, value.var = "avgSAH5")
+tmpSAH5 <- rbind(tmpSAH5, tmpSAH5[2,] - tmpSAH5[1,])
+
+rownames(tmpSAH5) <- c("Before", "After", "Difference")
+tmpSAH5[3,"dPeriod"] <- NA
+
+stargazer(tmpSAH5, summary = FALSE, align = TRUE, type = "text")
+
+tmpUnemp5 <- dcast(avgSAH5, dPeriod ~ Highstringency, value.var = "avgUnemp5")
+tmpUnemp5 <- rbind(tmpUnemp5, tmpUnemp5[2,] - tmpUnemp5[1,])
+
+rownames(tmpUnemp5) <- c("Before", "After", "Difference")
+tmpUnemp5[3,"dPeriod"] <- NA
+
+stargazer(tmpUnemp5, summary = FALSE, align = TRUE, type = "text")
+
+tmpGini5 <- dcast(avgSAH5, dPeriod ~ Highstringency, value.var = "avgGini5")
+tmpGini5 <- rbind(tmpGini5, tmpGini5[2,] - tmpGini5[1,])
+
+rownames(tmpGini5) <- c("Before", "After", "Difference")
+tmpGini5[3,"dPeriod"] <- NA
+
+stargazer(tmpGini5, summary = FALSE, align = TRUE, type = "text")
+
+####################################
+#Running DiD regression (estimation)
+####################################
+
+##CURRENT MODEL
+mdlSAH5 <- unem_rate ~ dPeriod + Highstringency + Highstringency:dPeriod
+mdlSAH5A <- unem_rate ~ dPeriod + Highstringency + Highstringency:dPeriod + aged_65_older + GDPkcap
+
+rsltOLSSAH5 <- lm(mdlSAH5, data = dfCovid.sub)
+rsltOLSSAH5A <- lm(mdlSAH5A, data = dfCovid.sub)
+
+stargazer(rsltOLSSAH5, rsltOLSSAH5A, intercept.bottom = FALSE, align = TRUE, type = "text")
+
+
+##Gini model - effect of SAH on inequality - CURRENT GINI
+mdlGini5 <- gini ~ dPeriod + Highstringency + Highstringency:dPeriod
+mdlGini5A <- gini ~ dPeriod + Highstringency + Highstringency:dPeriod + aged_65_older + GDPkcap
+
+rsltOLSGini5 <- lm(mdlGini5, data = dfCovid.sub)
+rsltOLSGini5A <- lm(mdlGini5A, data = dfCovid.sub)
+
+stargazer(rsltOLSGini5, rsltOLSGini5A, intercept.bottom = FALSE, align = TRUE, type = "text")
+
+##Create plot of difference in difference effect on unemployment and gini
+dfCovid.plot <- ddply(dfCovid.sub, .(Month_new, Highstringency), summarise,
+                      avgUnemp = mean(unem_rate, na.rm = TRUE),
+                      avgGini = mean(gini, na.rm = TRUE))
+
+dfCovid.plot$cHighstringency <- ifelse(dfCovid.plot$Highstringency == 1, "High Stringency", "Low Stringency")
+
+line.avgUnemp <- ggplot(dfCovid.plot, aes(Month_new, avgUnemp, group = cHighstringency, color = cHighstringency))
+line.avgUnemp + geom_line() + geom_point() + geom_vline(xintercept = 9, linetype = "dashed", size = 1) + labs(x = "Month", y = "Average Unemployment Rate") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 18)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  theme(axis.title = element_text(size=rel(1.5)),
+        axis.text  = element_text(size=rel(1.5))) +
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+         panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "bottom",
+        legend.title = element_text(size=16), 
+        legend.text = element_text(size=14)) +
+  guides(color=guide_legend("Stringency groups"))
+ggsave(paste0(dirRslt, "DiD unemployment.pdf"))
+
+line.avgGini <- ggplot(dfCovid.plot, aes(Month_new, avgGini, group = cHighstringency, color = cHighstringency))
+line.avgGini + geom_line() + geom_point() + geom_vline(xintercept = 9, linetype = "dashed", size = 1) + labs(x = "Month", y = "Average Gini") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 18)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) + 
+  theme(axis.title = element_text(size=rel(1.5)),
+        axis.text  = element_text(size=rel(1.5))) +
+  theme(axis.line = element_line(colour = "black"),
+   panel.grid.major = element_blank(),
+   panel.grid.minor = element_blank(),
+   panel.border = element_blank(),
+   panel.background = element_blank(),
+   legend.position = "bottom",
+   legend.title = element_text(size=16), 
+   legend.text = element_text(size=14)) +
+  guides(color=guide_legend("Stringency groups"))
+ggsave(paste0(dirRslt, "DiD gini.pdf"))
 #-------#
-#packages
+# Panel data
 #-------#
-install.packages("plm")
-install.packages("wbstats")
-install.packages("multiwayvcov")
+
 library(ggplot2)
 library(stargazer)
 library(reshape2)
@@ -13,9 +207,8 @@ library(plyr)
 library(wbstats)
 library(plm)
 library(readxl)
-library(sandwich)  
+library(sandwich)
 library(multiwayvcov)
-library(tidyverse)
 
 remove(list=ls())
 
@@ -23,22 +216,16 @@ remove(list=ls())
 #-----Question 1------#
 #---------------------#
 
-#-----path names------#
-dir <- "C:/Users/Lucas/Desktop/Advanced Statistics & Programming/Groupassignment/"
+#-----path names------##Create project folder
+dir <- "~/OneDrive/Documents/Uni/Rotterdam/Block 1/Advanced Statistics/R Data/"
 
 dirProg <- paste0(dir, "Programs/")
 dirData <- paste0(dir, "Data/")
-dirResults <- paste0(dir, "Results/")
+dirRslt <- paste0(dir, "Results/")
 
+#Import data
+dfPanel <- read_excel(paste0(dirData,"Europe_Covid_Data.xlsx"))
 
-#---------------------------------------------------#
-#read data
-#---------------------------------------------------#
-
-#import data
-##dfPanel <- read_excel("C:/Users/Lucas/Desktop/Advanced Statistics & Programming/Groupassignment/Data/ASAP Group - Data_v6.xlsx", 
-##                      sheet = "Data_Current_EU")
-dfPanel <- read_excel("Europe_Covid_Data.xlsx")
 str(dfPanel)
 #changing all 0s in the gini variable to null values
 dfPanel$gini[dfPanel$gini == 0] <- NA
@@ -211,7 +398,6 @@ shapiro.test(dfPanel.sub$diff.GDPkcap)
 
 # Multicollinearity
 # 5 is the score for vif. the number is high means they are multicorrleated
-install.packages("car")
 library(car)
 vif <- vif(rsltRE.Country)
 stargazer(vif, type = "text")
@@ -238,8 +424,7 @@ dfPanel.sub_means <- dfPanel.sub %>%
             y = y, 
             Month_new = Month_new) %>% 
   ungroup() %>% 
-  mutate(y_pred = predict(rsltFE.Country) + y_mean) %>% 
-  select(-y_mean)
+  mutate(y_pred = predict(rsltFE.Country) + y_mean)
 
 str(dfPanel.sub_means)
 dfPanel.sub_means %>% 
@@ -250,15 +435,19 @@ dfPanel.sub_means %>%
   facet_wrap(~Country) +
   ylab("Unemployment rate") +
   xlab("Month") +
-  ggtitle("Visualising in-sample prediction, Four Countries") + theme(axis.line = element_line(colour = "black"),
-                                                                      panel.grid.major = element_blank(),
-                                                                      panel.grid.minor = element_blank(),
-                                                                      panel.border = element_blank(),
-                                                                      panel.background = element_blank())
-ggsave(paste0(dir, "unemployment rate.jpg"))
-
-
-
+  theme(axis.title = element_text(size=rel(1.5)),
+        axis.text  = element_text(size=rel(1.5))) + 
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        strip.text = element_text(size=18),
+        legend.position = "bottom",
+        legend.title = element_text(size=18), 
+        legend.text = element_text(size=14)) +
+  guides(linetype=guide_legend("Prediction values"))
+ggsave(paste0(dirRslt, "unemployment rate.pdf"))
 
 dfPanel.sub_means <- dfPanel.sub %>% 
   mutate(y = gini) %>% 
@@ -267,11 +456,10 @@ dfPanel.sub_means <- dfPanel.sub %>%
             y = y, 
             Month_new = Month_new) %>% 
   ungroup() %>% 
-  mutate(y_pred = predict(rsltFE.CountryB) + y_mean) %>% 
-  select(-y_mean)
+  mutate(y_pred = predict(rsltFE.CountryB) + y_mean)
 
 str(dfPanel.sub_means)
-dfPanel.sub_means %>% 
+plot2 <- dfPanel.sub_means %>% 
   gather(type, value, y, y_pred) %>%
   filter(Country == "Netherlands" | Country == "Austria"| Country == "Croatia"| Country == "Spain") %>% 
   ggplot(aes(x = Month_new, y = value, linetype = type))+
@@ -279,194 +467,16 @@ dfPanel.sub_means %>%
   facet_wrap(~Country) +
   ylab("Gini coefficient") +
   xlab("Month") +
-  ggtitle("Visualising in-sample prediction, Four Countries") + theme(axis.line = element_line(colour = "black"),
-                                                                   panel.grid.major = element_blank(),
-                                                                   panel.grid.minor = element_blank(),
-                                                                   panel.border = element_blank(),
-                                                                   panel.background = element_blank())
-ggsave(paste0(dir, "Gini coefficient.jpg"))
-
-#------------------------------------------------------------------------------
-#Differences-in-difference Regression Code
-#------------------------------------------------------------------------------
-
-###########################################################################
-#Load libraries
-###########################################################################
-library(ggplot2)
-library(RColorBrewer)
-library(psych)
-library(stargazer)
-library(ROCR)
-library(reshape2)
-library(dplyr)
-library(plyr)
-library(gridExtra)
-library(lmtest)
-library(extraDistr)
-library(sandwich)
-library(MASS)
-library(AER)
-library(readxl)
-library(scales)
-#Create project folder
-dir <- "~C:/Users/Tome/OneDrive - Erasmus University Rotterdam/BAM/Term 1 - Stats and Programming/Group Assignment/"
-
-dirProg <- paste0(dir, "Programs/")
-dirData <- paste0(dir, "Data/")
-dirRslt <- paste0(dir, "Results/")
-
-#Import data
-dfCovid <- read_excel("Europe_Covid_Data.xlsx")
-
-###########################################################################
-#Prepare the data
-###########################################################################
-
-#Create a few variables and set zeros to NA
-dfCovid$gini <- replace(dfCovid$gini, dfCovid$gini == 0, NA)
-dfCovid$MonthYear <- paste0(dfCovid$Month,dfCovid$Year)
-#Converting GDP per capita to GDP per K capita
-dfCovid$GDPkcap <- dfCovid$gdp_per_capita / 1000
-
-dfCovid.sub <- dfCovid[complete.cases(dfCovid),]
-
-#Filter to balance countries (this is due to the previous command, which kicked out
-#countries that didnt have a GINI for 2020, but they are left in for 2019 because there
-#they had a GINI value)
-dfCovid.sub <- dplyr::filter(dfCovid.sub, Country == "Austria" | Country == "Belgium" |
-                      Country == "Bulgaria" | Country == "Croatia" |
-                      Country == "Cyprus" | Country == "Denmark" |
-                      Country == "Estonia" | Country == "Finland" |
-                      Country == "Greece" | Country == "Hungary" |
-                      Country == "Lithuania" | Country == "Netherlands" |
-                      Country == "Portugal" | Country == "Romania" |
-                      Country == "Slovenia" | Country == "Spain" |
-                      Country == "Sweden", .preserve = FALSE)
-
-#Calculating mean value of stay_home for EU and filtering on 2020
-dfCovid.avg <-
-  ddply(dfCovid.sub, .(Year), summarise,
-        avg.stay_home = mean(stay_home, na.rm=TRUE))
-dfCovid.avg <- dplyr::filter(dfCovid.avg, Year == 2020)
-
-#Calculating mean value of stay_home for each country and filtering on 2020
-dfCovid.avg2 <-
-  ddply(dfCovid.sub, .(Country, Year), summarise,
-        avg.stay_home = mean(stay_home, na.rm=TRUE))
-dfCovid.avg2 <- dplyr::filter(dfCovid.avg2, Year == 2020)
-
-#Merging total mean value and per country mean value
-dfCovid.tmp <- merge(dfCovid.avg, dfCovid.avg2, by=c("Year"))
-
-#Classify countries and removing unwanted columns
-dfCovid.tmp$Highstringency <- as.numeric(dfCovid.tmp$avg.stay_home.y > dfCovid.tmp$avg.stay_home.x)
-dfCovid.tmp <- subset(dfCovid.tmp, select = -c(avg.stay_home.y,avg.stay_home.x,Year))
-
-dfCovid.sub <- merge(dfCovid.sub, dfCovid.tmp, by = "Country")
-
-##Adjust the month to remove the duplicate month for 2019 and 2020
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "7"] <- 1
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "8"] <- 2
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "9"] <- 3
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "10"] <- 4
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "11"] <- 5
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2019" & dfCovid.sub $Month == "12"] <- 6
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "1"] <- 7
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "2"] <- 8
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "3"] <- 9
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "4"] <- 10
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "5"] <- 11
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "6"] <- 12
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "7"] <- 13
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "8"] <- 14
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "9"] <- 15
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "10"] <- 16
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "11"] <- 17
-dfCovid.sub $Month_new [dfCovid.sub $Year == "2020" & dfCovid.sub $Month == "12"] <- 18
-
-##Creating a dummy comparing Months 1-9 with months 10-18
-dfCovid.sub$dPeriod <- ifelse(dfCovid.sub$Month_new < 10, 0 ,1)
-
-###########################################################################
-#Summary table
-###########################################################################
-
-avgSAH5 <- ddply(dfCovid.sub, .(dPeriod, Highstringency), summarise,
-                 avgSAH5 = mean(stay_home),
-                 avgUnemp5 = mean(unem_rate),
-                 avgGini5 = mean(gini))
-
-##Tables of outcomes for SAH5
-
-tmpSAH5 <- dcast(avgSAH5, dPeriod ~ Highstringency, value.var = "avgSAH5")
-tmpSAH5 <- rbind(tmpSAH5, tmpSAH5[2,] - tmpSAH5[1,])
-
-rownames(tmpSAH5) <- c("Before", "After", "Difference")
-tmpSAH5[3,"dPeriod"] <- NA
-
-stargazer(tmpSAH5, summary = FALSE, align = TRUE, type = "text")
-
-tmpUnemp5 <- dcast(avgSAH5, dPeriod ~ Highstringency, value.var = "avgUnemp5")
-tmpUnemp5 <- rbind(tmpUnemp5, tmpUnemp5[2,] - tmpUnemp5[1,])
-
-rownames(tmpUnemp5) <- c("Before", "After", "Difference")
-tmpUnemp5[3,"dPeriod"] <- NA
-
-stargazer(tmpUnemp5, summary = FALSE, align = TRUE, type = "text")
-
-tmpGini5 <- dcast(avgSAH5, dPeriod ~ Highstringency, value.var = "avgGini5")
-tmpGini5 <- rbind(tmpGini5, tmpGini5[2,] - tmpGini5[1,])
-
-rownames(tmpGini5) <- c("Before", "After", "Difference")
-tmpGini5[3,"dPeriod"] <- NA
-
-stargazer(tmpGini5, summary = FALSE, align = TRUE, type = "text")
-
-####################################
-#Running DiD regression (estimation)
-####################################
-
-##CURRENT MODEL
-mdlSAH5 <- unem_rate ~ dPeriod + Highstringency + Highstringency:dPeriod
-mdlSAH5A <- unem_rate ~ dPeriod + Highstringency + Highstringency:dPeriod + aged_65_older + GDPkcap
-
-rsltOLSSAH5 <- lm(mdlSAH5, data = dfCovid.sub)
-rsltOLSSAH5A <- lm(mdlSAH5A, data = dfCovid.sub)
-
-stargazer(rsltOLSSAH5, rsltOLSSAH5A, intercept.bottom = FALSE, align = TRUE, type = "text")
-
-
-##Gini model - effect of SAH on inequality - CURRENT GINI
-mdlGini5 <- gini ~ dPeriod + Highstringency + Highstringency:dPeriod
-mdlGini5A <- gini ~ dPeriod + Highstringency + Highstringency:dPeriod + aged_65_older + GDPkcap
-
-rsltOLSGini5 <- lm(mdlGini5, data = dfCovid.sub)
-rsltOLSGini5A <- lm(mdlGini5A, data = dfCovid.sub)
-
-stargazer(rsltOLSGini5, rsltOLSGini5A, intercept.bottom = FALSE, align = TRUE, type = "text")
-
-##Create plot of difference in difference effect on unemployment and gini
-dfCovid.plot <- ddply(dfCovid.sub, .(Month_new, Highstringency), summarise,
-                      avgUnemp = mean(unem_rate, na.rm = TRUE),
-                      avgGini = mean(gini, na.rm = TRUE))
-
-dfCovid.plot$cHighstringency <- ifelse(dfCovid.plot$Highstringency == 1, "High Stringency", "Low Stringency")
-
-line.avgUnemp <- ggplot(dfCovid.plot, aes(Month_new, avgUnemp, group = cHighstringency, color = cHighstringency))
-line.avgUnemp + geom_line() + geom_point() + geom_vline(xintercept = 9, linetype = "dashed", size = 1) + ggtitle("Average unemployment rate of high and low stringency countries") + labs(x = "Month", y = "Average Unemployment Rate") +
-  scale_x_continuous(breaks = scales::pretty_breaks(n = 18)) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 8)) + theme(axis.line = element_line(colour = "black"),
-                                                                       panel.grid.major = element_blank(),
-                                                                       panel.grid.minor = element_blank(),
-                                                                       panel.border = element_blank(),
-                                                                       panel.background = element_blank())
-
-line.avgGini <- ggplot(dfCovid.plot, aes(Month_new, avgGini, group = cHighstringency, color = cHighstringency))
-line.avgGini + geom_line() + geom_point() + geom_vline(xintercept = 9, linetype = "dashed", size = 1) + ggtitle("Average gini coefficient of high and low stringency countries") + labs(x = "Month", y = "Average Gini") +
-  scale_x_continuous(breaks = scales::pretty_breaks(n = 18)) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) + theme(axis.line = element_line(colour = "black"),
-                                                                    panel.grid.major = element_blank(),
-                                                                    panel.grid.minor = element_blank(),
-                                                                    panel.border = element_blank(),
-                                                                    panel.background = element_blank())
+  theme(axis.title = element_text(size=rel(1.5)),
+        axis.text  = element_text(size=rel(1.5))) + 
+  theme(axis.line = element_line(colour = "black"),
+       panel.grid.major = element_blank(),
+       panel.grid.minor = element_blank(),
+       panel.border = element_blank(),
+       panel.background = element_blank(),
+       strip.text = element_text(size=18),
+       legend.position = "bottom",
+       legend.title = element_text(size=18), 
+       legend.text = element_text(size=14)) +
+  guides(linetype=guide_legend("Prediction values"))
+ggsave(paste0(dirRslt, "Gini coefficient.pdf"))
